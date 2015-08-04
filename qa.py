@@ -1,10 +1,12 @@
 from __future__ import absolute_import
 from __future__ import print_function
 import re
+import tarfile
 
 import numpy as np
 np.random.seed(1337)  # for reproducibility
 
+from keras.datasets.data_utils import get_file
 from keras.layers.embeddings import Embedding
 from keras.layers.core import Dense, Merge
 from keras.layers import recurrent
@@ -19,11 +21,15 @@ The results are comparable to those for an LSTM model provided in Weston et al.:
 "Towards AI-Complete Question Answering: A Set of Prerequisite Toy Tasks"
 http://arxiv.org/abs/1502.05698
 
+For the resources related to the bAbI project, refer to:
+https://research.facebook.com/researchers/1543934539189348
+
 Notes:
 
-- With the default word vector, sentence vector, and query vector sizes, the
-model achieves 52.1% test accuracy on QA1 in only 20 epochs. Each epoch takes
-approximately 2 seconds on a standard laptop CPU.
+- With default word, sentence, and query vector sizes, the GRU model achieves:
+  - 52.1% test accuracy on QA1 in 20 epochs (2 seconds per epoch on CPU)
+  - 37.0% test accuracy on QA2 in 20 epochs (16 seconds per epoch on CPU)
+In comparison, the Facebook paper achives 50% and 20% for the LSTM baseline.
 
 - The task does not traditionally parse the question separately. This likely
 improves accuracy and is a good example of merging two RNNs.
@@ -40,6 +46,7 @@ LSTMs / GRUs to provide the correct answer. Given only the supporting facts,
 these RNNs can achieve 100% accuracy on many tasks. Memory networks and neural
 networks that use attentional processes can efficiently search through this
 noise to find the relevant statements, improving performance substantially.
+This becomes especially obvious on QA2 and QA3, both far longer than QA1.
 '''
 
 def tokenize(sent):
@@ -81,12 +88,12 @@ def parse_stories(lines, only_supporting=False):
             story.append(sent)
     return data
 
-def get_stories(fn, only_supporting=False, max_length=None):
+def get_stories(f, only_supporting=False, max_length=None):
     '''Given a file name, read the file, retrieve the stories, and then convert the sentences into a single story.
 
     If max_length is supplied, any stories longer than max_length tokens will be discarded.
     '''
-    data = parse_stories(open(fn).readlines(), only_supporting=only_supporting)
+    data = parse_stories(f.readlines(), only_supporting=only_supporting)
     flatten = lambda data: reduce(lambda x, y: x + y, data)
     data = [(flatten(story), q, answer) for story, q, answer in data if not max_length or len(flatten(story)) < max_length]
     return data
@@ -113,9 +120,18 @@ BATCH_SIZE = 32
 EPOCHS = 20
 print('RNN / Embed / Sent / Query = {}, {}, {}, {}'.format(RNN, EMBED_HIDDEN_SIZE, SENT_HIDDEN_SIZE, QUERY_HIDDEN_SIZE))
 
-challenge = 'qa1'
-train = get_stories(challenge + '.train.txt')
-test = get_stories(challenge + '.test.txt')
+path = get_file('babi-tasks-v1-2.tar.gz', origin='http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz')
+tar = tarfile.open(path)
+# Default QA1 with 1000 samples
+#challenge = 'tasks_1-20_v1-2/en/qa1_single-supporting-fact_{}.txt'
+# QA1 with 10,000 samples
+#challenge = 'tasks_1-20_v1-2/en-10k/qa1_single-supporting-fact_{}.txt'
+# QA2 with 1000 samples
+challenge = 'tasks_1-20_v1-2/en/qa2_two-supporting-facts_{}.txt'
+# QA2 with 1000 samples
+#challenge = 'tasks_1-20_v1-2/en-10k/qa2_two-supporting-facts_{}.txt'
+train = get_stories(tar.extractfile(challenge.format('train')))
+test = get_stories(tar.extractfile(challenge.format('test')))
 
 vocab = sorted(reduce(lambda x, y: x | y, (set(story + q) for story, q, answer in train + test)))
 # Reserve 0 for masking via pad_sequences
