@@ -1,0 +1,155 @@
+from __future__ import absolute_import
+from __future__ import print_function
+import re
+
+import numpy as np
+np.random.seed(1337)  # for reproducibility
+
+from keras.layers.embeddings import Embedding
+from keras.layers.core import Dense, Merge
+from keras.layers import recurrent
+from keras.models import Sequential
+from keras.preprocessing.sequence import pad_sequences
+
+'''
+Trains two recurrent neural networks based upon a story and a question.
+The resulting merged vector is then queried to answer a range of bAbI tasks.
+
+The results are comparable to those for an LSTM model provided in Weston et al.:
+"Towards AI-Complete Question Answering: A Set of Prerequisite Toy Tasks"
+http://arxiv.org/abs/1502.05698
+
+Notes:
+
+- With the default word vector, sentence vector, and query vector sizes, the
+model achieves 52.1% test accuracy on QA1 in only 20 epochs. Each epoch takes
+approximately 2 seconds on a standard laptop CPU.
+
+- The task does not traditionally parse the question separately. This likely
+improves accuracy and is a good example of merging two RNNs.
+
+- The word vector embeddings are not shared between the story and question RNNs.
+
+- See how the accuracy changes given 10,000 training samples (en-10k) instead
+of only 1000. 1000 was used in order to be comparable to the original paper.
+
+- Experiment with GRU, LSTM, and JZS1-3 as they give subtly different results.
+
+- The length and noise (i.e. 'useless' story components) impact the ability for
+LSTMs / GRUs to provide the correct answer. Given only the supporting facts,
+these RNNs can achieve 100% accuracy on many tasks. Memory networks and neural
+networks that use attentional processes can efficiently search through this
+noise to find the relevant statements, improving performance substantially.
+'''
+
+def tokenize(sent):
+    '''Return the tokens of a sentence including punctuation.
+
+    >>> tokenize('Bob dropped the apple. Where is the apple?')
+    ['Bob', 'dropped', 'the', 'apple', '.', 'Where', 'is', 'the', 'apple', '?']
+    '''
+    return [x.strip() for x in re.split('(\W+)?', sent) if x.strip()]
+
+def parse_stories(lines, only_supporting=False):
+    '''Parse stories provided in the bAbi tasks format
+
+    If only_supporting is true, only the sentences that support the answer are kept.
+    '''
+    data = []
+    story = []
+    for line in lines:
+        line = line.strip()
+        nid, line = line.split(' ', 1)
+        nid = int(nid)
+        if nid == 1:
+            story = []
+        if '\t' in line:
+            q, a, supporting = line.split('\t')
+            q = tokenize(q)
+            substory = None
+            if only_supporting:
+                # Only select the related substory
+                supporting = map(int, supporting.split())
+                substory = [story[i - 1] for i in supporting]
+            else:
+                # Provide all the substories
+                substory = [x for x in story if x]
+            data.append((substory, q, a))
+            story.append('')
+        else:
+            sent = tokenize(line)
+            story.append(sent)
+    return data
+
+def get_stories(fn, only_supporting=False, max_length=None):
+    '''Given a file name, read the file, retrieve the stories, and then convert the sentences into a single story.
+
+    If max_length is supplied, any stories longer than max_length tokens will be discarded.
+    '''
+    data = parse_stories(open(fn).readlines(), only_supporting=only_supporting)
+    flatten = lambda data: reduce(lambda x, y: x + y, data)
+    data = [(flatten(story), q, answer) for story, q, answer in data if not max_length or len(flatten(story)) < max_length]
+    return data
+
+def vectorize_stories(data):
+    X = []
+    Xq = []
+    Y = []
+    for story, query, answer in data:
+        x = [word_idx[w] for w in story]
+        xq = [word_idx[w] for w in query]
+        y = np.zeros(vocab_size)
+        y[word_idx[answer]] = 1
+        X.append(x)
+        Xq.append(xq)
+        Y.append(y)
+    return pad_sequences(X, maxlen=story_maxlen), pad_sequences(Xq, maxlen=query_maxlen), np.array(Y)
+
+RNN = recurrent.GRU
+EMBED_HIDDEN_SIZE = 50
+SENT_HIDDEN_SIZE = 100
+QUERY_HIDDEN_SIZE = 100
+BATCH_SIZE = 32
+EPOCHS = 20
+print('RNN / Embed / Sent / Query = {}, {}, {}, {}'.format(RNN, EMBED_HIDDEN_SIZE, SENT_HIDDEN_SIZE, QUERY_HIDDEN_SIZE))
+
+challenge = 'qa1'
+train = get_stories(challenge + '.train.txt')
+test = get_stories(challenge + '.test.txt')
+
+vocab = sorted(reduce(lambda x, y: x | y, (set(story + q) for story, q, answer in train + test)))
+# Reserve 0 for masking via pad_sequences
+vocab_size = len(vocab) + 1
+word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
+story_maxlen = max(map(len, (x for x, _, _ in train + test)))
+query_maxlen = max(map(len, (x for _, x, _ in train + test)))
+
+X, Xq, Y = vectorize_stories(train)
+tX, tXq, tY = vectorize_stories(test)
+
+print('vocab = {}'.format(vocab))
+print('X.shape = {}'.format(X.shape))
+print('Xq.shape = {}'.format(Xq.shape))
+print('Y.shape = {}'.format(Y.shape))
+print('story_maxlen, query_maxlen = {}, {}'.format(story_maxlen, query_maxlen))
+
+print('Build model...')
+
+sentrnn = Sequential()
+sentrnn.add(Embedding(vocab_size, EMBED_HIDDEN_SIZE, mask_zero=True))
+sentrnn.add(RNN(EMBED_HIDDEN_SIZE, SENT_HIDDEN_SIZE, return_sequences=False))
+
+qrnn = Sequential()
+qrnn.add(Embedding(vocab_size, EMBED_HIDDEN_SIZE))
+qrnn.add(RNN(EMBED_HIDDEN_SIZE, QUERY_HIDDEN_SIZE, return_sequences=False))
+
+model = Sequential()
+model.add(Merge([sentrnn, qrnn], mode='concat'))
+model.add(Dense(SENT_HIDDEN_SIZE + QUERY_HIDDEN_SIZE, vocab_size, activation='softmax'))
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', class_mode='categorical')
+
+print('Training')
+model.fit([X, Xq], Y, batch_size=BATCH_SIZE, nb_epoch=EPOCHS, validation_split=0.05, show_accuracy=True)
+loss, acc = model.evaluate([tX, tXq], tY, batch_size=BATCH_SIZE, show_accuracy=True)
+print('Test loss / test accuracy = {:.4f} / {:.4f}'.format(loss, acc))
