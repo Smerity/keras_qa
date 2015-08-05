@@ -29,7 +29,7 @@ Notes:
 - With default word, sentence, and query vector sizes, the GRU model achieves:
   - 52.1% test accuracy on QA1 in 20 epochs (2 seconds per epoch on CPU)
   - 37.0% test accuracy on QA2 in 20 epochs (16 seconds per epoch on CPU)
-In comparison, the Facebook paper achives 50% and 20% for the LSTM baseline.
+In comparison, the Facebook paper achieves 50% and 20% for the LSTM baseline.
 
 - The task does not traditionally parse the question separately. This likely
 improves accuracy and is a good example of merging two RNNs.
@@ -49,6 +49,7 @@ noise to find the relevant statements, improving performance substantially.
 This becomes especially obvious on QA2 and QA3, both far longer than QA1.
 '''
 
+
 def tokenize(sent):
     '''Return the tokens of a sentence including punctuation.
 
@@ -56,6 +57,7 @@ def tokenize(sent):
     ['Bob', 'dropped', 'the', 'apple', '.', 'Where', 'is', 'the', 'apple', '?']
     '''
     return [x.strip() for x in re.split('(\W+)?', sent) if x.strip()]
+
 
 def parse_stories(lines, only_supporting=False):
     '''Parse stories provided in the bAbi tasks format
@@ -88,6 +90,7 @@ def parse_stories(lines, only_supporting=False):
             story.append(sent)
     return data
 
+
 def get_stories(f, only_supporting=False, max_length=None):
     '''Given a file name, read the file, retrieve the stories, and then convert the sentences into a single story.
 
@@ -97,6 +100,7 @@ def get_stories(f, only_supporting=False, max_length=None):
     flatten = lambda data: reduce(lambda x, y: x + y, data)
     data = [(flatten(story), q, answer) for story, q, answer in data if not max_length or len(flatten(story)) < max_length]
     return data
+
 
 def vectorize_stories(data):
     X = []
@@ -123,17 +127,17 @@ print('RNN / Embed / Sent / Query = {}, {}, {}, {}'.format(RNN, EMBED_HIDDEN_SIZ
 path = get_file('babi-tasks-v1-2.tar.gz', origin='http://www.thespermwhale.com/jaseweston/babi/tasks_1-20_v1-2.tar.gz')
 tar = tarfile.open(path)
 # Default QA1 with 1000 samples
-#challenge = 'tasks_1-20_v1-2/en/qa1_single-supporting-fact_{}.txt'
+# challenge = 'tasks_1-20_v1-2/en/qa1_single-supporting-fact_{}.txt'
 # QA1 with 10,000 samples
-#challenge = 'tasks_1-20_v1-2/en-10k/qa1_single-supporting-fact_{}.txt'
+# challenge = 'tasks_1-20_v1-2/en-10k/qa1_single-supporting-fact_{}.txt'
 # QA2 with 1000 samples
-challenge = 'tasks_1-20_v1-2/en/qa2_two-supporting-facts_{}.txt'
-# QA2 with 1000 samples
-#challenge = 'tasks_1-20_v1-2/en-10k/qa2_two-supporting-facts_{}.txt'
+challenge = 'tasks_1-20_v1-2/en-10k/qa2_two-supporting-facts_{}.txt'
+# QA2 with 10,000 samples
+# challenge = 'tasks_1-20_v1-2/en-10k/qa2_two-supporting-facts_{}.txt'
 train = get_stories(tar.extractfile(challenge.format('train')))
 test = get_stories(tar.extractfile(challenge.format('test')))
 
-vocab = sorted(reduce(lambda x, y: x | y, (set(story + q) for story, q, answer in train + test)))
+vocab = sorted(reduce(lambda x, y: x | y, (set(story + q + [answer]) for story, q, answer in train + test)))
 # Reserve 0 for masking via pad_sequences
 vocab_size = len(vocab) + 1
 word_idx = dict((c, i + 1) for i, c in enumerate(vocab))
